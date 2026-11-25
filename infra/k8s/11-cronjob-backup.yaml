@@ -1,0 +1,55 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: minio-bucket-backup
+  namespace: drive-mini
+  labels:
+    app: minio-backup
+spec:
+  # Schedule: Daily at 02:00 AM (can be changed to "*/30 * * * *" for frequent testing)
+  schedule: "0 2 * * *"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: minio-backup
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: s3-backup
+              image: amazon/aws-cli:latest
+              env:
+                - name: AWS_ACCESS_KEY_ID
+                  value: minioadmin
+                - name: AWS_SECRET_ACCESS_KEY
+                  value: minioadmin123
+                - name: AWS_DEFAULT_REGION
+                  value: us-east-1
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  EP=http://minio-service:9000
+                  echo "[Backup CronJob] Starting MinIO Object Storage Backup at $(date)..."
+
+                  echo "[Backup CronJob] Mirroring 'drive-files' bucket..."
+                  mkdir -p /backup/drive-files-backup
+                  aws --endpoint-url $EP s3 sync s3://drive-files /backup/drive-files-backup/
+
+                  echo "[Backup CronJob] Mirroring 'drive-thumbnails' bucket..."
+                  mkdir -p /backup/drive-thumbnails-backup
+                  aws --endpoint-url $EP s3 sync s3://drive-thumbnails /backup/drive-thumbnails-backup/
+
+                  echo "[Backup CronJob] Object storage backup completed successfully at $(date)!"
+                  ls -lh /backup/
+              volumeMounts:
+                - name: backup-storage
+                  mountPath: /backup
+          volumes:
+            - name: backup-storage
+              persistentVolumeClaim:
+                claimName: backup-storage-pvc

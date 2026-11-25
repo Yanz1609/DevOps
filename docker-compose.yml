@@ -1,0 +1,176 @@
+services:
+  # 1. PostgreSQL - Metadata storage
+  postgres:
+    image: postgres:16-alpine
+    container_name: drive_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: drive_user
+      POSTGRES_PASSWORD: drive_secret_password
+      POSTGRES_DB: drive_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./api/src/db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U drive_user -d drive_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 2. MinIO (fork pgsty/silo) - Object Storage
+  minio:
+    image: docker.io/pgsty/silo:latest
+    container_name: drive_minio
+    restart: always
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    ports:
+      - "9000:9000" # S3 API endpoint
+      - "9001:9001" # Web Console
+    volumes:
+      - minio_data:/data
+
+  # 3. Tạo bucket tự động (dùng aws-cli thay cho mc)
+  minio-init:
+    image: amazon/aws-cli:latest
+    container_name: drive_minio_init
+    depends_on:
+      minio:
+        condition: service_started
+    environment:
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin123
+      AWS_DEFAULT_REGION: us-east-1
+    volumes:
+      - ./infra/minio/thumbnails-policy.json:/policy/thumbnails-policy.json:ro
+    entrypoint: >
+      /bin/sh -c "
+      until aws --endpoint-url http://minio:9000 s3api list-buckets > /dev/null 2>&1; do echo 'Waiting for MinIO...'; sleep 2; done;
+      aws --endpoint-url http://minio:9000 s3api create-bucket --bucket drive-files || true;
+      aws --endpoint-url http://minio:9000 s3api create-bucket --bucket drive-thumbnails || true;
+      aws --endpoint-url http://minio:9000 s3api put-bucket-policy --bucket drive-thumbnails --policy file:///policy/thumbnails-policy.json;
+      echo 'MinIO buckets and policies configured successfully.';
+      exit 0;
+      "
+
+  # 4. Redis - Job Queue
+  redis:
+    image: redis:7-alpine
+    container_name: drive_redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # 5. Backend API Service
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: drive_api
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    environment:
+      PORT: 5000
+      NODE_ENV: production
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: drive_user
+      DB_PASSWORD: drive_secret_password
+      DB_NAME: drive_db
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_USE_SSL: "false"
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin123
+      MINIO_FILES_BUCKET: drive-files
+      MINIO_THUMBNAILS_BUCKET: drive-thumbnails
+      MINIO_PUBLIC_URL: http://localhost:9000
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_QUEUE_NAME: thumbnail_jobs
+      JWT_SECRET: super_secret_jwt_key_drive_mini_devops_2026
+      JWT_EXPIRES_IN: 7d
+      DEFAULT_QUOTA_BYTES: 1073741824
+    ports:
+      - "5000:5000"
+
+  # 6. Thumbnail Worker Service
+  worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    container_name: drive_worker
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: drive_user
+      DB_PASSWORD: drive_secret_password
+      DB_NAME: drive_db
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_USE_SSL: "false"
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin123
+      MINIO_FILES_BUCKET: drive-files
+      MINIO_THUMBNAILS_BUCKET: drive-thumbnails
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_QUEUE_NAME: thumbnail_jobs
+      THUMBNAIL_WIDTH: 256
+      THUMBNAIL_HEIGHT: 256
+
+  # 7. Frontend UI (React + Vite SPA)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: drive_frontend
+    restart: always
+    depends_on:
+      - api
+    ports:
+      - "3000:80"
+
+  # 8. Ingress Reverse Proxy (Giới hạn kích thước upload 100M)
+  ingress:
+    image: nginx:alpine
+    container_name: drive_ingress
+    restart: always
+    ports:
+      - "80:80"
+    volumes:
+      - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - frontend
+      - api
+
+volumes:
+  postgres_data:
+  minio_data:
+  redis_data:

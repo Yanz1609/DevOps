@@ -1,0 +1,9 @@
+minio_server       = "localhost:9000"
+minio_access_key   = "minioadmin"
+minio_secret_key   = "minioadmin123"
+minio_ssl          = false
+k8s_namespace      = "drive-mini"
+postgres_pvc_size  = "10Gi"
+minio_pvc_size     = "50Gi"
+kube_config_path   = "~/.kube/config"
+
