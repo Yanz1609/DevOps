@@ -1,4 +1,35 @@
 
+def notifyTelegram(String status) {
+    try {
+        withCredentials([
+            string(
+                credentialsId: 'drive-mini-telegram-token',
+                variable: 'TELEGRAM_TOKEN'
+            ),
+            string(
+                credentialsId: 'drive-mini-telegram-chat-id',
+                variable: 'TELEGRAM_CHAT_ID'
+            )
+        ]) {
+            withEnv(["BUILD_STATUS=${status}"]) {
+                sh '''
+                    set +x
+                    curl -fs --max-time 20 -X POST \
+                    "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+                    --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+                    --data-urlencode "text=Drive Mini - ${BUILD_STATUS}
+Job: ${JOB_NAME}
+Build: #${BUILD_NUMBER}" \
+                    > /dev/null
+                '''
+            }
+        }
+        echo 'Telegram notification sent'
+    } catch (Exception e) {
+        echo 'Telegram notification failed'
+    }
+}
+
 pipeline {
     agent any
 
@@ -12,6 +43,14 @@ pipeline {
     }
 
     stages {
+        stage('Notify Start') {
+            steps {
+                script {
+                    notifyTelegram('BUILD STARTED')
+                }
+            }
+        }
+
         stage('Checkout') {
             steps {
                 git branch: 'main',
@@ -44,11 +83,15 @@ pipeline {
 
     post {
         success {
-            echo 'Drive Mini - BUILD SUCCESS'
+            script {
+                notifyTelegram('BUILD SUCCESS')
+            }
         }
 
         failure {
-            echo 'Drive Mini - BUILD FAILED'
+            script {
+                notifyTelegram('BUILD FAILED')
+            }
         }
     }
 }
