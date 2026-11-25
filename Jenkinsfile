@@ -19,7 +19,8 @@ def notifyTelegram(String status) {
                     --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
                     --data-urlencode "text=Drive Mini - ${BUILD_STATUS}
 Job: ${JOB_NAME}
-Build: #${BUILD_NUMBER}" \
+Build: #${BUILD_NUMBER}
+Website: https://dev-ops-fa5r.vercel.app" \
                     > /dev/null
                 '''
             }
@@ -79,18 +80,39 @@ pipeline {
                 sh 'test -f frontend/dist/index.html'
             }
         }
+
+        stage('Deploy Vercel') {
+            steps {
+                withCredentials([
+                    string(
+                        credentialsId: 'drive-mini-vercel-hook',
+                        variable: 'VERCEL_HOOK'
+                    )
+                ]) {
+                    sh '''
+                        set +x
+                        curl -fs --max-time 30 \
+                        -X POST "$VERCEL_HOOK"
+                    '''
+                }
+
+                script {
+                    notifyTelegram('VERCEL DEPLOY TRIGGERED')
+                }
+            }
+        }
     }
 
     post {
         success {
             script {
-                notifyTelegram('BUILD SUCCESS')
+                notifyTelegram('PIPELINE SUCCESS')
             }
         }
 
         failure {
             script {
-                notifyTelegram('BUILD FAILED')
+                notifyTelegram('PIPELINE FAILED')
             }
         }
     }
