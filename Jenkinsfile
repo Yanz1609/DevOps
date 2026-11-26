@@ -14,7 +14,7 @@ def notifyTelegram(String status) {
             withEnv(["BUILD_STATUS=${status}"]) {
                 sh '''
                     set +x
-                    curl -fs --connect-timeout 3 --max-time 5 -X POST \
+                    curl -fs --max-time 20 -X POST \
                     "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
                     --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
                     --data-urlencode "text=Drive Mini - ${BUILD_STATUS}
@@ -35,14 +35,12 @@ pipeline {
     agent any
 
     triggers {
-        pollSCM('* * * * *')
+        pollSCM('H/2 * * * *')
     }
 
     options {
         disableConcurrentBuilds()
         skipDefaultCheckout()
-        timestamps()
-        buildDiscarder(logRotator(numToKeepStr: '20'))
     }
 
     stages {
@@ -64,7 +62,7 @@ pipeline {
         stage('Install Dependencies') {
             steps {
                 dir('frontend') {
-                    sh 'npm ci --prefer-offline --no-audit --no-fund'
+                    sh 'npm ci'
                 }
             }
         }
@@ -93,7 +91,7 @@ pipeline {
                 ]) {
                     sh '''
                         set +x
-                        curl -fs --connect-timeout 5 --max-time 15 \
+                        curl -fs --max-time 30 \
                         -X POST "$VERCEL_HOOK"
                     '''
                 }
